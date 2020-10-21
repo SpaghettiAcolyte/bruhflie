@@ -1,21 +1,21 @@
+import json
+import logging
 import multiprocessing
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from random import choice
+from random import shuffle
 from time import sleep
 
 import cflib
+import matplotlib._color_data as mcd
 from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.swarm import CachedCfFactory, Swarm
 from cflib.crazyflie.syncLogger import SyncLogger
-
 from matplotlib import animation
 from matplotlib import pyplot as plt
-import matplotlib._color_data as mcd
-from random import shuffle
-import csv
-from random import choice
 
 # Change uris and sequences according to your setup
 URI1 = 'radio://0/80/2M/E7E7E7E7E5'
@@ -141,7 +141,6 @@ def land(cf, position):
 
 
 def run_sequence(scf, sequence):
-    #time.sleep(30.0)
     try:
         cf = scf.cf
         take_off(cf, sequence[0])
@@ -253,6 +252,10 @@ def real_time_plotting(data, ndrones):
 
     # вызывается при каждом callback-е позиции
     def animate(framedata):
+        if framedata == 'stop':
+            return (*[l for drone in lines_2d for l in drone],
+                    *[l for drone in lines_3d for l in drone])
+
         if xdata.get(framedata[0], None) is None:
             xdata[framedata[0]] = list()
         if ydata.get(framedata[0], None) is None:
@@ -383,21 +386,31 @@ def get_coord_test():
         sleep(0.2)
 
 
-def read_csv_coords(file):
+'''def read_csv_coords(file):
     with open(file) as csv_file:
         csv_reader = csv.DictReader(csv_file, delimiter=',')
         coords = list()
         for row in csv_reader:
-            yield [(float(row['x']), float(row['y']), float(row['z']), float(row['time']))]
+            yield [(float(row['x']), float(row['y']), float(row['z']), float(row['time']))]'''
+
+
+def read_json_coords(file):
+    with open(file) as f:
+        coords = json.load(f)
+    for uri in uris:
+        seq_args[uri] = coords['square']
+    for c in coords['square']:
+        print("hi")
+        yield ['00'] + c
+    yield 'stop'
 
 
 if __name__ == '__main__':
-
     ndrones = len(uris)
-    #c = read_csv_coords('coordinates.csv')
-    #real_time_plotting(c, 1)
+    c = read_json_coords('coordinates.json')
+    real_time_plotting(c, ndrones)
     # logging.basicConfig(level=logging.DEBUG)
-    '''cflib.crtp.init_drivers(enable_debug_driver=False)
+    cflib.crtp.init_drivers(enable_debug_driver=False)
     factory = CachedCfFactory(rw_cache='./cache')
     with Swarm(uris, factory=factory) as swarm:
         #print('Waiting for parameters to be downloaded...')
@@ -411,9 +424,9 @@ if __name__ == '__main__':
         p = multiprocessing.Process(target=real_time_plotting, args=(d, ndrones))
         p.start()
         #swarm.parallel(run_sequence, args_dict=seq_args)
-        p.join()'''
-    start_thread(get_coord_test)
+        p.join()
+    '''start_thread(get_coord_test)
     sleep(1)
     d = yield_position(position_data)
     real_time_plotting(d, 2)
-    log_file.close()
+    log_file.close()'''
