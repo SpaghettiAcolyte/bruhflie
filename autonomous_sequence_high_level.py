@@ -1,42 +1,68 @@
-import json
-import logging
+# -*- coding: utf-8 -*-
+#
+#     ||          ____  _ __
+#  +------+      / __ )(_) /_______________ _____  ___
+#  | 0xBC |     / __  / / __/ ___/ ___/ __ `/_  / / _ \
+#  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
+#   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
+#
+#  Copyright (C) 2018 Bitcraze AB
+#
+#  This program is free software; you can redistribute it and/or
+#  modify it under the terms of the GNU General Public License
+#  as published by the Free Software Foundation; either version 2
+#  of the License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+#  MA  02110-1301, USA.
+"""
+Simple example that connects to one crazyflie (check the address at the top
+and update it to your crazyflie address) and uses the high level commander
+to send setpoints and trajectory to fly a figure 8.
+
+This example is intended to work with any positioning system (including LPS).
+It aims at documenting how to set the Crazyflie in position control mode
+and how to send setpoints using the high level commander.
+"""
 import multiprocessing
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from random import shuffle, choice
-from time import sleep
+from random import shuffle
 
-import cflib
+import cflib.crtp
 import matplotlib._color_data as mcd
 from cflib.crazyflie.log import LogConfig
-from cflib.crazyflie.swarm import CachedCfFactory, Swarm
+from cflib.crazyflie.mem import MemoryElement
+from cflib.crazyflie.mem import Poly4D
+from cflib.crazyflie.swarm import CachedCfFactory
+from cflib.crazyflie.swarm import Swarm
 from cflib.crazyflie.syncLogger import SyncLogger
 from matplotlib import animation
 from matplotlib import pyplot as plt
 
-# Change uris and sequences according to your setup
-URI1 = 'radio://0/80/2M/E7E7E7E7E5'
-#URI2 = 'radio://0/80/2M/E7E7E7E7E1'
-#URI3 = 'radio://0/80/2M/E7E7E7E7E5'
-#URI4 = 'radio://0/80/2M/E7E7E7E7E1'
+# The trajectory to fly
+# See https://github.com/whoenig/uav_trajectories for a tool to generate
+# trajectories
 
-sequence1 = [
-    (1.1, 1.1, 0.0, 3.0),
-    (1.7, 1.1, 0.5, 3.0),
-    (2.0, 1.1, 0.0, 3.0),
-]
-
-seq_args = {
-    URI1: [sequence1],
-    #URI2: [sequence1],
-    #URI3: [sequence3],
-}
-
-uris = [
-    URI1,
-    #URI2,
+# Duration,x^0,x^1,x^2,x^3,x^4,x^5,x^6,x^7,y^0,y^1,y^2,y^3,y^4,y^5,y^6,y^7,z^0,z^1,z^2,z^3,z^4,z^5,z^6,z^7,yaw^0,yaw^1,yaw^2,yaw^3,yaw^4,yaw^5,yaw^6,yaw^7
+figure8 = [
+    [1.050000, 0.000000, -0.000000, 0.000000, -0.000000, 0.830443, -0.276140, -0.384219, 0.180493, -0.000000, 0.000000, -0.000000, 0.000000, -1.356107, 0.688430, 0.587426, -0.329106, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [0.710000, 0.396058, 0.918033, 0.128965, -0.773546, 0.339704, 0.034310, -0.026417, -0.030049, -0.445604, -0.684403, 0.888433, 1.493630, -1.361618, -0.139316, 0.158875, 0.095799, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [0.620000, 0.922409, 0.405715, -0.582968, -0.092188, -0.114670, 0.101046, 0.075834, -0.037926, -0.291165, 0.967514, 0.421451, -1.086348, 0.545211, 0.030109, -0.050046, -0.068177, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [0.700000, 0.923174, -0.431533, -0.682975, 0.177173, 0.319468, -0.043852, -0.111269, 0.023166, 0.289869, 0.724722, -0.512011, -0.209623, -0.218710, 0.108797, 0.128756, -0.055461, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [0.560000, 0.405364, -0.834716, 0.158939, 0.288175, -0.373738, -0.054995, 0.036090, 0.078627, 0.450742, -0.385534, -0.954089, 0.128288, 0.442620, 0.055630, -0.060142, -0.076163, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [0.560000, 0.001062, -0.646270, -0.012560, -0.324065, 0.125327, 0.119738, 0.034567, -0.063130, 0.001593, -1.031457, 0.015159, 0.820816, -0.152665, -0.130729, -0.045679, 0.080444, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [0.700000, -0.402804, -0.820508, -0.132914, 0.236278, 0.235164, -0.053551, -0.088687, 0.031253, -0.449354, -0.411507, 0.902946, 0.185335, -0.239125, -0.041696, 0.016857, 0.016709, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [0.620000, -0.921641, -0.464596, 0.661875, 0.286582, -0.228921, -0.051987, 0.004669, 0.038463, -0.292459, 0.777682, 0.565788, -0.432472, -0.060568, -0.082048, -0.009439, 0.041158, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [0.710000, -0.923935, 0.447832, 0.627381, -0.259808, -0.042325, -0.032258, 0.001420, 0.005294, 0.288570, 0.873350, -0.515586, -0.730207, -0.026023, 0.288755, 0.215678, -0.148061, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
+    [1.053185, -0.398611, 0.850510, -0.144007, -0.485368, -0.079781, 0.176330, 0.234482, -0.153567, 0.447039, -0.532729, -0.855023, 0.878509, 0.775168, -0.391051, -0.713519, 0.391628, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],  # noqa
 ]
 
 
@@ -52,6 +78,22 @@ def init_log(path='/home/stranger/Content/Python/Crazyflie/Logs/'):
 log_file = init_log()
 
 
+class Uploader:
+    def __init__(self):
+        self._is_done = False
+
+    def upload(self, trajectory_mem):
+        print('Uploading data')
+        trajectory_mem.write_data(self._upload_done)
+
+        while not self._is_done:
+            time.sleep(0.2)
+
+    def _upload_done(self, mem, addr):
+        print('Data uploaded')
+        self._is_done = True
+
+
 def wait_for_position_estimator(scf):
     print('Waiting for estimator to find position...')
 
@@ -64,7 +106,7 @@ def wait_for_position_estimator(scf):
     var_x_history = [1000] * 10
     var_z_history = [1000] * 10
 
-    threshold = 0.001
+    threshold = 0.0005
 
     with SyncLogger(scf, log_config) as logger:
         for log_entry in logger:
@@ -85,7 +127,7 @@ def wait_for_position_estimator(scf):
             max_z = max(var_z_history)
 
             print("{} {} {}".
-                  format(max_x - min_x, max_y - min_y, max_z - min_z))
+               format(max_x - min_x, max_y - min_y, max_z - min_z))
 
             if (max_x - min_x) < threshold and (
                     max_y - min_y) < threshold and (
@@ -93,14 +135,8 @@ def wait_for_position_estimator(scf):
                 break
 
 
-def wait_for_param_download(scf):
-    while not scf.cf.param.is_updated:
-        time.sleep(1.0)
-    print('Parameters downloaded for', scf.cf.link_uri)
-
-
-def reset_estimator(scf):
-    cf = scf.cf
+def reset_estimator(cf):
+    cf = cf.cf
     cf.param.set_value('kalman.resetEstimation', '1')
     time.sleep(0.1)
     cf.param.set_value('kalman.resetEstimation', '0')
@@ -108,62 +144,34 @@ def reset_estimator(scf):
     wait_for_position_estimator(cf)
 
 
-def take_off(cf, position):
-    take_off_time = 1.0
-    sleep_time = 0.1
-    steps = int(take_off_time / sleep_time)
-    vz = position[2] / take_off_time
-
-    # print(vz)
-
-    for i in range(steps):
-        cf.commander.send_velocity_world_setpoint(0, 0, vz, 0)
-        time.sleep(sleep_time)
+def activate_high_level_commander(cf):
+    cf = cf.cf
+    cf.param.set_value('commander.enHighLevel', '1')
 
 
-def land(cf, position):
-    landing_time = 1.0
-    sleep_time = 0.1
-    steps = int(landing_time / sleep_time)
-    vz = -position[2] / landing_time
-
-    # print(vz)
-
-    for _ in range(steps):
-        cf.commander.send_velocity_world_setpoint(0, 0, vz, 0)
-        time.sleep(sleep_time)
-
-    cf.commander.send_stop_setpoint()
-    # Make sure that the last packet leaves before the link is closed
-    # since the message queue is not flushed before closing
-    time.sleep(0.1)
+def activate_mellinger_controller(cf):
+    cf = cf.cf
+    cf.param.set_value('stabilizer.controller', '2')
 
 
-def run_sequence(scf, sequence):
-    try:
-        cf = scf.cf
-        take_off(cf, sequence[0])
-        for position in sequence:
-            print('Setting position {}'.format(position))
-            end_time = time.time() + position[3]
-            while time.time() < end_time:
-                cf.commander.send_position_setpoint(position[0],
-                                                    position[1],
-                                                    position[2], 0)
-                time.sleep(0.1)
-        land(cf, sequence[-1])
-    except Exception as e:
-        print(e)
+def upload_trajectory(cf, trajectory_id, trajectory):
+    cf = cf.cf
+    trajectory_mem = cf.mem.get_mems(MemoryElement.TYPE_TRAJ)[0]
 
+    total_duration = 0
+    for row in trajectory:
+        duration = row[0]
+        x = Poly4D.Poly(row[1:9])
+        y = Poly4D.Poly(row[9:17])
+        z = Poly4D.Poly(row[17:25])
+        yaw = Poly4D.Poly(row[25:33])
+        trajectory_mem.poly4Ds.append(Poly4D(duration, x, y, z, yaw))
+        total_duration += duration
 
-def start_thread(target, *args):
-    thread = threading.Thread(
-        target=target,
-        args=args
-    )
-    thread.daemon = True
-    thread.start()
-    return thread
+    Uploader().upload(trajectory_mem)
+    cf.high_level_commander.define_trajectory(trajectory_id, 0,
+                                              len(trajectory_mem.poly4Ds))
+    return total_duration
 
 
 def get_colors():
@@ -328,104 +336,74 @@ def start_position_printing(scf):
     log_conf.start()
 
 
-def battery_callback(timestamp, data, logconf):
-    bat_level = data['pm.batteryLevel']
-    state = data['pm.state']
-    vbat = data['pm.vbat']
+def run_sequence(scf):
+    # 8 figure
+    cf = scf.cf
+    duration = upload_trajectory(cf, 1, figure8)
+    commander = cf.high_level_commander
+    commander.takeoff(1.0, 2.0)
+    time.sleep(3.0)
+    relative = True
+    commander.start_trajectory(1, 1.0, relative)
+    time.sleep(duration)
+    commander.land(0.0, 2.0)
+    time.sleep(2)
+    commander.stop()
 
-    print('{}: [\n\tlevel: {}\n\tstate: {}\n\tvolts: {}\n]'.format(logconf.cf.link_uri[-2:], bat_level, state, vbat))
-    # log_file.write('{},{},{},{},{}\n'.format(logconf.cf.link_uri,
-    #                                         datetime.utcnow().timestamp(), bat_level, state, vbat))
+    # forward/backward
+    '''cf = scf.cf
+    flight_time = 2
+    commander = cf.high_level_commander
 
+    commander.takeoff(0.5, 2.0)
+    time.sleep(3)
 
-def start_battery_printing(scf):
-    log_conf = LogConfig(name='Battery', period_in_ms=1000)
-    log_conf.add_variable('pm.batteryLevel', 'uint8_t')
-    log_conf.add_variable('pm.state', 'int8_t')
-    log_conf.add_variable('pm.vbat', 'float')
+    for _ in range(5):
+        commander.go_to(1, 0, 0, 0, flight_time, relative=True)
+        time.sleep(flight_time + 1)
 
-    scf.cf.log.add_config(log_conf)
-    log_conf.data_received_cb.add_callback(battery_callback)
-    log_conf.start()
+    for _ in range(5):
+        commander.go_to(-1, 0, 0, 0, flight_time, relative=True)
+        time.sleep(flight_time + 1)
 
-
-def fly_params_callback(timestamp, data, logconf):
-    accelz = data['controller.accelz']
-    pitch = data['stabilizer.pitch']
-    roll = data['stabilizer.roll']
-    thrust = data['stabilizer.thrust']
-    yaw = data['stabilizer.yaw']
-
-
-    print('{}: [\n\taccelz: {}\n\tpitch: {}\n\troll:{}\n\tthrust: {}\n\tyaw: {}\n]'.format(
-          logconf.cf.link_uri[-2:],accelz, pitch, roll, thrust, yaw))
-    # log_file.write('{},{},{},{},{}\n'.format(logconf.cf.link_uri,
-    #                                         datetime.utcnow().timestamp(), bat_level, state, vbat))
-
-
-def start_fly_params_printing(scf):
-    log_conf = LogConfig(name='Fly_params', period_in_ms=100)
-    log_conf.add_variable('controller.accelz', 'float')
-    log_conf.add_variable('stabilizer.pitch', 'float')
-    log_conf.add_variable('stabilizer.roll', 'float')
-    log_conf.add_variable('stabilizer.thrust', 'float')
-    log_conf.add_variable('stabilizer.yaw', 'float')
-
-    scf.cf.log.add_config(log_conf)
-    log_conf.data_received_cb.add_callback(fly_params_callback)
-    log_conf.start()
+    commander.land(0.0, 2.0)
+    time.sleep(2)
+    commander.stop()'''
 
 
-def get_coord_test():
-    import random as r
-    while True:
-        # position_data.append([r.random() * 3, r.random() * 3, r.random() * 3])
-        # position_data.put_nowait(['00', r.random() * 3, r.random() * 3, r.random() * 3])
-        position_data.put_nowait([choice(['00', '01']), r.random() * 3, r.random() * 3, r.random() * 3])
-        sleep(0.2)
-
-
-'''def read_csv_coords(file):
-    with open(file) as csv_file:
-        csv_reader = csv.DictReader(csv_file, delimiter=',')
-        coords = list()
-        for row in csv_reader:
-            yield [(float(row['x']), float(row['y']), float(row['z']), float(row['time']))]'''
-
-
-def read_json_coords(file):
-    with open(file) as f:
-        coords = json.load(f)
-    for uri in uris:
-        seq_args[uri] = coords['square']
-    for c in coords['square']:
-        print("hi")
-        yield ['00'] + c
-    yield 'stop'
+# URI to the Crazyflie to connect to
+uris = {
+    'radio://0/80/2M/E7E7E7E7E9',
+    # 'radio://0/80/2M/E7E7E7E7E3',
+    # 'radio://0/80/2M/E7E7E7E7E5',
+    # 'radio://0/80/2M/E7E7E7E7EB',
+}
 
 
 if __name__ == '__main__':
     ndrones = len(uris)
-    c = read_json_coords('coordinates.json')
-    real_time_plotting(c, ndrones)
-    # logging.basicConfig(level=logging.DEBUG)
+
     cflib.crtp.init_drivers(enable_debug_driver=False)
+    '''with SyncCrazyflie(uri, cf=Crazyflie(rw_cache='./cache')) as scf:
+        cf = scf.cf
+        trajectory_id = 1
+
+        activate_high_level_commander(cf)
+        #activate_mellinger_controller(cf)
+        duration = upload_trajectory(cf, trajectory_id, figure8)
+        print('The sequence is {:.1f} seconds long'.format(duration))
+        reset_estimator(cf)
+        run_sequence(cf, trajectory_id, duration) '''
+
     factory = CachedCfFactory(rw_cache='./cache')
     with Swarm(uris, factory=factory) as swarm:
-        #print('Waiting for parameters to be downloaded...')
-        swarm.parallel(reset_estimator)
-        swarm.parallel(wait_for_param_download)
-        swarm.parallel(start_position_printing)
-        swarm.parallel(start_battery_printing)
-        swarm.parallel(start_fly_params_printing)
+        swarm.parallel_safe(activate_high_level_commander)
+        # swarm.parallel_safe(reset_estimator)
+        swarm.parallel_safe(start_position_printing)
         d = yield_position(position_data)
-        # real_time_plotting(d)
         p = multiprocessing.Process(target=real_time_plotting, args=(d, ndrones))
         p.start()
-        #swarm.parallel(run_sequence, args_dict=seq_args)
+        # swarm.parallel_safe(run_sequence)
         p.join()
-    '''start_thread(get_coord_test)
-    sleep(1)
-    d = yield_position(position_data)
-    real_time_plotting(d, 2)
-    log_file.close()'''
+
+    log_file.close()
